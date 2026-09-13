@@ -191,7 +191,8 @@ std::vector<std::uint16_t> build_river(const std::string& dir, const bucketing::
     faiss::IndexFlatL2 index(1);
     index.add(bins, centroids.data());
     std::vector<std::uint16_t> map(static_cast<std::size_t>(n));
-    std::vector<faiss::idx_t> labels(static_cast<std::size_t>(options.rows_per_chunk));
+    // Faiss labels are int64_t; its idx_t alias moved between versions.
+    std::vector<std::int64_t> labels(static_cast<std::size_t>(options.rows_per_chunk));
     std::vector<float> dist(static_cast<std::size_t>(options.rows_per_chunk));
     for (std::int64_t start = 0; start < n; start += options.rows_per_chunk) {
         const std::int64_t rows = std::min<std::int64_t>(options.rows_per_chunk, n - start);
@@ -242,7 +243,7 @@ std::vector<std::uint16_t> build_transition(
     index.add(k, centroids.data());
     std::vector<std::uint16_t> map(static_cast<std::size_t>(n));
     std::vector<float> buf(static_cast<std::size_t>(options.rows_per_chunk) * dim);
-    std::vector<faiss::idx_t> labels(static_cast<std::size_t>(options.rows_per_chunk));
+    std::vector<std::int64_t> labels(static_cast<std::size_t>(options.rows_per_chunk));
     std::vector<float> dist(static_cast<std::size_t>(options.rows_per_chunk));
     for (std::int64_t start = 0; start < n; start += options.rows_per_chunk) {
         const std::int64_t rows = std::min<std::int64_t>(options.rows_per_chunk, n - start);

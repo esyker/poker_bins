@@ -1,11 +1,9 @@
 # Poker Bins
 
-Builds offline Texas hold'em card-abstraction maps so a solver can share a
-strategy across similar hands. Extracted from `poker_solver/cpp/src/nlhe_game`,
-with configurable bucket counts and one entry point that builds all
-streets. Changes are local to this repository.
+Builds offline Texas hold'em card-abstraction maps commonly called buckets so a solver can share a
+strategy across similar hands, significantly reducing computing time.
 
-## Purpose and algorithm
+## Algorithm
 
 Suit-equivalent hands share a canonical index through hand-isomorphism. The
 pipeline builds maps from the river backwards:
@@ -22,47 +20,6 @@ wins plus half of ties, divided by 990. Faiss K-means groups equities and
 next-street probability histograms using squared Euclidean distance, with 20
 iterations and seed 1234 by default (both configurable). Histograms capture possible future outcomes rather
 than only current hand strength.
-
-By default, training features are prepared for a reservoir sample of 64 points
-per cluster. Every canonical hand is still assigned to its nearest centroid.
-Transition assignment streams configurable chunks of 8,192 hands by default
-to avoid retaining the full histogram matrix. River equities and completed maps
-remain in memory.
-
-Each map is a headerless, native-endian `uint16_t` array: canonical hand ID is
-the array index, and bucket ID is the value. Consumers must use matching bucket
-counts and the same indexer/card grouping (`{2}`, `{2,3}`, `{2,4}`, `{2,5}`).
-Cluster labels are not strength rankings. Custom counts require configuring the
-consumer accordingly; `poker_solver` still has its original fixed counts.
-
-The source consists of `src/bucketing/build_offline.cpp` (pipeline),
-`src/bucketing/build_offline.h` (options and output path),
-`src/bucketing/hand_isomorphism.h` (C++ adapter), and
-`src/cli/build_offline.cpp` (argument parsing).
-
-## Dependencies
-
-| Dependency | Purpose | Needed? | Source and storage |
-| --- | --- | --- | --- |
-| **OMPEval** | Evaluates poker hands | Yes | [zekyll/OMPEval](https://github.com/zekyll/OMPEval/tree/4aec210ff75b0851af0ee170b35a7899e1a4fe8f), stored in `src/third_party/OMPEval` |
-| **hand-isomorphism** | Canonical indexing of suit-equivalent hands | Yes | [kdub0/hand-isomorphism](https://github.com/kdub0/hand-isomorphism/tree/dabcee4a84c1d62ee6ded9b6ff02ece6823fcc0f), stored in `src/third_party/hand-isomorphism` |
-| **Faiss** | K-means clustering and nearest-centroid assignment | Yes | [facebookresearch/faiss](https://github.com/facebookresearch/faiss); Ubuntu package `libfaiss-dev` |
-| **OpenMP** | Runs calculation loops across CPU threads | For existing parallel execution | GCC compiler/runtime support, detected by CMake |
-| **OpenBLAS / LAPACK** | Numerical dependencies of Faiss | For the selected Faiss build | Ubuntu packages `libopenblas-dev` and `liblapack-dev` |
-
-The two vendored libraries contain only required, unmodified upstream files and
-their original `LICENSE.txt` files. OMPEval was developed by Timo A.;
-hand-isomorphism was developed by Kevin Waugh. Their pinned revisions are:
-
-- OMPEval: `4aec210ff75b0851af0ee170b35a7899e1a4fe8f`.
-- hand-isomorphism: `dabcee4a84c1d62ee6ded9b6ff02ece6823fcc0f`.
-
-These are ordinary source files stored with this repository, not Git submodules.
-CMake compiles them directly from `src/third_party`; it does not download them.
-They remain available if upstream disappears or becomes private. System
-dependencies still come from Ubuntu repositories and are not pinned to exact
-package versions. To update a vendored library, replace its required files and
-license from a chosen upstream commit and update the revision recorded here.
 
 ## Install
 
@@ -97,6 +54,24 @@ Run all streets with default counts, keeping output in a Docker volume:
 ```bash
 docker run --rm -v poker-bins-maps:/tmp/poker_solver_buckets poker-bins
 ```
+
+What each part means:
+
+| Part | Meaning |
+| --- | --- |
+| `docker run` | Creates and starts a container from an image. |
+| `--rm` | Deletes the container after it stops. Optional: it prevents stopped containers from piling up. It does not delete the image or this named volume. |
+| `-v poker-bins-maps:/tmp/poker_solver_buckets` | Connects a persistent Docker volume to the directory where the program writes its maps. |
+| `poker-bins-maps` | The volume's name. Docker creates it if needed and reuses it on later runs. It is managed by Docker, not a folder in this repository. |
+| `/tmp/poker_solver_buckets` | The output directory inside the container. Files written here are stored in the connected volume. |
+| `poker-bins` | The image name, matching `docker build -t poker-bins .`. If you named your image `poker-bucketing`, use that name here instead. |
+
+The colon in `-v` separates the volume name on the left from the container
+directory on the right. After the program finishes, `--rm` removes the container,
+but the generated `.bin` files remain in `poker-bins-maps`. Running the command
+again uses the same volume; the generator recomputes and overwrites its maps.
+No CLI options are passed here, so the executable uses its default settings.
+This assumes the Dockerfile's `ENTRYPOINT` runs `/app/build/build_offline`.
 
 Or choose counts, including clustered preflop, and training samples:
 
@@ -156,3 +131,13 @@ preserves the files after the container exits.
 Generation covers every canonical hand, including exhaustive river equities.
 Lower bin counts or smaller training samples do not turn it into a quick test.
 Use `docker run --rm poker-bins --help` to check the CLI without generation.
+
+## Dependencies
+
+| Dependency | Purpose | Source and storage |
+| --- | --- | --- |
+| **OMPEval** | Evaluates poker hands | [zekyll/OMPEval](https://github.com/zekyll/OMPEval/tree/4aec210ff75b0851af0ee170b35a7899e1a4fe8f), stored in `src/third_party/OMPEval` |
+| **hand-isomorphism** | Canonical indexing of suit-equivalent hands | [kdub0/hand-isomorphism](https://github.com/kdub0/hand-isomorphism/tree/dabcee4a84c1d62ee6ded9b6ff02ece6823fcc0f), stored in `src/third_party/hand-isomorphism` |
+| **Faiss** | K-means clustering and nearest-centroid assignment | [facebookresearch/faiss](https://github.com/facebookresearch/faiss); Ubuntu package `libfaiss-dev` |
+| **OpenMP** | Runs calculation loops across CPU threads | GCC compiler/runtime support, detected by CMake |
+| **OpenBLAS / LAPACK** | Numerical dependencies of Faiss | Ubuntu packages `libopenblas-dev` and `liblapack-dev` |
