@@ -23,18 +23,7 @@ than only current hand strength.
 
 ## Install
 
-The Linux Docker image includes the compiler, CMake, CPU Faiss, OpenBLAS,
-LAPACK, OpenMP support, hand-isomorphism, and OMPEval. From the repository root:
-
-```bash
-docker build -t poker-bins .
-```
-
-The Dockerfile uses Ubuntu 24.04 and installs dependencies before compiling the
-single executable. Build with Linux containers. The image has not been built or
-run as part of this change.
-
-For a native Ubuntu installation instead:
+For a native Ubuntu installation, from the repository root:
 
 ```bash
 sudo apt-get update
@@ -47,7 +36,62 @@ Only the vendored indexer's two C files and OMPEval's `HandEvaluator.cpp` are co
 A custom Faiss installation can be selected with
 `-Dfaiss_DIR=/path/to/lib/cmake/faiss`. No GPU or Python is required.
 
+For Docker, the Linux image includes the compiler, CMake, CPU Faiss, OpenBLAS,
+LAPACK, OpenMP support, hand-isomorphism, and OMPEval:
+
+```bash
+docker build -t poker-bins .
+```
+
+The Dockerfile uses Ubuntu 24.04 and installs dependencies before compiling the
+single executable. Build with Linux containers. The image has not been built or
+run as part of this change.
+
 ## How to run
+
+The following is a list of parameters that can be passed to the command line tool:
+
+| Option | Default | Allowed values |
+| --- | ---: | --- |
+| `--river-bins N` | 2000 | 1..65536 |
+| `--turn-bins N` | 5000 | 1..65536 |
+| `--flop-bins N` | 5000 | 1..65536 |
+| `--preflop-bins N` | 169 | 1..169; 169 preserves the identity map without clustering; 1..168 clusters distributions over flop bins; >169 is rejected because there are only 169 canonical starting hands |
+| `--points-per-centroid N` | 64 | Nonnegative; turn/flop/clustered preflop prepared training points per cluster; 0 prepares all hands |
+| `--river-points-per-centroid N` | 64 | Nonnegative; river prepared training points per cluster; 0 prepares all hands |
+| `--kmeans-iters N` | 20 | Positive K-means iteration count, used on each clustered street |
+| `--seed N` | 1234 | 0..INT_MAX; seed for reservoir sampling and K-means initialization |
+| `--rows-per-chunk N` | 8192 | Positive batch size for assigning hands to bins after K-means training. Smaller batches use less temporary RAM; larger batches require fewer search calls. |
+| `--help`, `-h` | | Print usage without generating maps |
+
+Considerations:
+
+- All-hands training on turn/flop can require enormous RAM.
+- Use a fixed seed for comparisons; library versions and thread counts may still affect numerical results.
+- The transition assignment buffer requires roughly
+`rows_per_chunk * next_street_bins * 4` bytes (about 156 MiB at 8192 rows and
+5000 bins), plus maps and training data. Smaller chunks reduce that buffer;
+they do not cap total memory. All numeric options must fit a signed 32-bit
+integer. See `src/bucketing/build_offline.h` for guidance on every property.
+- Output is fixed at `/tmp/poker_solver_buckets/`: `river_map.bin`, `turn_map.bin`,
+`flop_map.bin`, and `preflop_map.bin`. Every run recomputes all streets in that
+order and overwrites their maps. A volume or bind mount
+preserves the files after the container exits.
+
+### Native run
+
+Save maps to `/tmp/poker_solver_buckets/` on the host, using defaults or custom options:
+
+```bash
+./build/build_offline
+./build/build_offline --river-bins 1000 --turn-bins 2500 --flop-bins 2500 --preflop-bins 80 --points-per-centroid 128 --river-points-per-centroid 128 --kmeans-iters 30 --seed 1234 --rows-per-chunk 4096
+```
+
+Use `./build/build_offline --help` to check the CLI without generation.
+
+### Docker run
+
+Use `docker run --rm poker-bins --help` to check the CLI without generation.
 
 Run all streets with default counts, keeping output in a Docker volume:
 
@@ -55,23 +99,8 @@ Run all streets with default counts, keeping output in a Docker volume:
 docker run --rm -v poker-bins-maps:/tmp/poker_solver_buckets poker-bins
 ```
 
-What each part means:
-
-| Part | Meaning |
-| --- | --- |
-| `docker run` | Creates and starts a container from an image. |
-| `--rm` | Deletes the container after it stops. Optional: it prevents stopped containers from piling up. It does not delete the image or this named volume. |
-| `-v poker-bins-maps:/tmp/poker_solver_buckets` | Connects a persistent Docker volume to the directory where the program writes its maps. |
-| `poker-bins-maps` | The volume's name. Docker creates it if needed and reuses it on later runs. It is managed by Docker, not a folder in this repository. |
-| `/tmp/poker_solver_buckets` | The output directory inside the container. Files written here are stored in the connected volume. |
-| `poker-bins` | The image name, matching `docker build -t poker-bins .`. If you named your image `poker-bucketing`, use that name here instead. |
-
-The colon in `-v` separates the volume name on the left from the container
-directory on the right. After the program finishes, `--rm` removes the container,
-but the generated `.bin` files remain in `poker-bins-maps`. Running the command
-again uses the same volume; the generator recomputes and overwrites its maps.
-No CLI options are passed here, so the executable uses its default settings.
-This assumes the Dockerfile's `ENTRYPOINT` runs `/app/build/build_offline`.
+The optional flag `--rm` deletes the container after it stops.
+`-v poker-bins-maps:/tmp/poker_solver_buckets` connects a persistent Docker volume to the directory where the program writes its maps.
 
 Or choose counts, including clustered preflop, and training samples:
 
@@ -84,53 +113,36 @@ To write directly to a host folder, replace the volume argument with
 (the host folder must already exist). Add `-e OMP_NUM_THREADS=8` before the image
 name to choose the OpenMP thread count.
 
-Native equivalents:
+## Complexity
 
-```bash
-./build/build_offline
-./build/build_offline --river-bins 1000 --turn-bins 2500 --flop-bins 2500 --preflop-bins 80 --points-per-centroid 128 --river-points-per-centroid 128 --kmeans-iters 30 --seed 1234 --rows-per-chunk 4096
-```
+For each clustered street, let `N` be its number of canonical hands, `K` its
+bin count, `D` its feature dimension (1 for river, next-street bin count
+otherwise), `S` its prepared training sample size, `B` the rows per chunk,
+and `I` the K-means iteration count. With `P` points per centroid,
+`S = min(N, P * K)`; `P = 0` uses all `N` hands.
 
-| Option | Default | Allowed values |
-| --- | ---: | --- |
-| `--river-bins N` | 2000 | 1..65536 |
-| `--turn-bins N` | 5000 | 1..65536 |
-| `--flop-bins N` | 5000 | 1..65536 |
-| `--preflop-bins N` | 169 | 1..169; 169 preserves the identity map, fewer clusters flop-bin probabilities |
-| `--points-per-centroid N` | 64 | Nonnegative; turn/flop/clustered preflop prepared training points per cluster |
-| `--river-points-per-centroid N` | 64 | Nonnegative; river prepared training points per cluster |
-| `--kmeans-iters N` | 20 | Positive K-means iteration count |
-| `--seed N` | 1234 | 0..INT_MAX; reservoir sampling and K-means seed |
-| `--rows-per-chunk N` | 8192 | Positive assignment batch size |
-| `--help`, `-h` | | Print usage without generating maps |
+| Work or storage | Cost |
+| --- | --- |
+| Prepared training data | `4 * S * D` bytes, plus `8 * S` bytes for sampled hand IDs |
+| Assignment buffers | About `4 * B * D + 16 * B` bytes on transition streets; river reuses its equity array |
+| River equities | `4 * N` bytes, retained through river assignment |
+| Maps in RAM and on disk | `2 * N` bytes per street; earlier maps remain in RAM while later streets are built |
+| K-means training | Up to roughly `O(I * S * K * D)` work; Faiss may internally subsample the prepared data |
+| Assigning all hands to bins | `O(N * K * D)` distance-comparison work after training |
 
-Preflop uses the existing identity map at 169 bins. For 1..168 bins, it clusters
-all or sampled canonical starting hands using their probabilities of reaching
-each flop bin. The probabilities count every legal unordered flop equally,
-including suit multiplicities; assignment still covers all 169 starting hands.
-More than 169 preflop clusters is rejected because there are only 169 inputs.
+With default settings, the flop training matrix alone uses about **6.0 GiB**
+(`320,000 * 5,000 * 4` bytes), and its assignment histogram buffer uses
+**156 MiB**. These coexist with maps, sampled IDs, centroids, and library
+allocations, so they are not total RAM estimates. Smaller chunks only reduce
+assignment buffers; fewer training samples reduce the training matrix.
 
-For either sample option, `0` prepares every hand on the affected streets.
-Faiss retains its default internal subsampling. Try 64..256 points per centroid
-and 20..50 K-means iterations initially. All-hands training on turn/flop can
-require enormous RAM; increasing samples never skips exhaustive river equities.
-Use a fixed seed for comparisons; library versions and thread counts may still
-affect numerical results. Default preflop identity ignores clustering settings.
-
-Try 1024..8192 rows per chunk. The transition assignment buffer requires roughly
-`rows_per_chunk * next_street_bins * 4` bytes (about 156 MiB at 8192 rows and
-5000 bins), plus maps and training data. Smaller chunks reduce that buffer;
-they do not cap total memory. All numeric options must fit a signed 32-bit
-integer. See `src/bucketing/build_offline.h` for guidance on every property.
-
-Output is fixed at `/tmp/poker_solver_buckets/`: `river_map.bin`, `turn_map.bin`,
-`flop_map.bin`, and `preflop_map.bin`. Every run recomputes all streets in that
-order and overwrites their maps. There is no resume mode. A volume or bind mount
-preserves the files after the container exits.
-
-Generation covers every canonical hand, including exhaustive river equities.
-Lower bin counts or smaller training samples do not turn it into a quick test.
-Use `docker run --rm poker-bins --help` to check the CLI without generation.
+Feature generation also costs time: river evaluates all 990 legal opponent
+hands per canonical hand; each transition histogram visits 46 river cards,
+47 turn cards, or 19,600 flops for clustered preflop. Transition histograms
+are generated for training samples and again for all hands during assignment.
+Reducing bins or samples does not skip exhaustive river equity calculation or
+full-map assignment. Default preflop uses a 169-entry identity map and skips
+training and histogram generation.
 
 ## Dependencies
 
