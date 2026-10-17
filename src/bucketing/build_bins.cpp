@@ -20,7 +20,9 @@
 
 namespace {
 
-// hand-isomorphism and OMPEval both encode a card as 4*rank + suit over 0..51,
+// Combine the first n card IDs in cards into an OMPEval hand for evaluation
+// or for combining hole cards with a board. The caller supplies distinct,
+// valid card IDs. hand-isomorphism and OMPEval encode cards as 4*rank + suit over 0..51,
 // so a hand-isomorphism card index is directly a valid OMPEval card.
 omp::Hand make_hand(const std::uint8_t* cards, int n) {
     omp::Hand h = omp::Hand::empty();
@@ -28,6 +30,11 @@ omp::Hand make_hand(const std::uint8_t* cards, int n) {
     return h;
 }
 
+// Initialize idx to index hands up to suit equivalence. cpr specifies the
+// number of cards in each indexing group: {2, 4}, for example, separates two
+// hole cards from an unordered four-card turn board. These groups do not
+// preserve the order in which board cards were dealt. Throw if initialization
+// fails; after success, the caller must release idx with hand_indexer_free.
 void init_indexer(hand_indexer_t* idx, std::initializer_list<std::uint8_t> cpr) {
     std::vector<std::uint8_t> rounds(cpr);
     if (!hand_indexer_init(static_cast<uint_fast32_t>(rounds.size()),
@@ -36,6 +43,11 @@ void init_indexer(hand_indexer_t* idx, std::initializer_list<std::uint8_t> cpr) 
     }
 }
 
+// Write count contiguous elements of type T to path, creating or overwriting
+// the file. The output is raw native binary data (count * sizeof(T) bytes),
+// without a header or byte-order conversion. Throw if opening fails or fwrite
+// reports fewer elements than requested; close the file before a short-write
+// exception. The final fclose return value is not checked.
 template <class T>
 void write_bin(const std::string& path, const T* data, std::int64_t count) {
     std::FILE* f = std::fopen(path.c_str(), "wb");
@@ -90,18 +102,18 @@ std::vector<float> train_centroids(int dim, int k, std::int64_t n,
 // Compute a transition histogram: enumerate legal next-street deals, look
 // up which bucket the resulting next-street hand falls in, and tally.
 void fill_histogram(const hand_indexer_t& self, const hand_indexer_t& next,
-                    const std::vector<std::uint16_t>& prev_map, int this_cards,
+                    const std::vector<std::uint16_t>& next_street_map, int known_card_count,
                     int dim, std::int64_t id, float* out) {
     std::fill(out, out + dim, 0.0f);
     std::uint8_t cards[7];  // hole cards and board (<= 7)
-    hand_unindex(&self, this_cards == 2 ? 0 : 1, static_cast<hand_index_t>(id), cards);
+    hand_unindex(&self, known_card_count == 2 ? 0 : 1, static_cast<hand_index_t>(id), cards);
     bool used[52] = {false};
-    for (int i = 0; i < this_cards; ++i) used[cards[i]] = true;
+    for (int i = 0; i < known_card_count; ++i) used[cards[i]] = true;
 
     // Preflop deals an unordered three-card flop: C(50,3) = 19600 equally
     // likely boards. Count actual deals, not canonical boards (their suit
     // multiplicities differ), then normalize to a probability distribution.
-    if (this_cards == 2) {
+    if (known_card_count == 2) {
         for (int a = 0; a < 52; ++a) {
             if (used[a]) continue;
             cards[2] = static_cast<std::uint8_t>(a);
@@ -112,19 +124,19 @@ void fill_histogram(const hand_indexer_t& self, const hand_indexer_t& next,
                     if (used[c]) continue;
                     cards[4] = static_cast<std::uint8_t>(c);
                     const auto next_id = hand_index_last(&next, cards);
-                    out[prev_map[static_cast<std::size_t>(next_id)]] += 1.0f;
+                    out[next_street_map[static_cast<std::size_t>(next_id)]] += 1.0f;
                 }
             }
         }
         for (int bin = 0; bin < dim; ++bin) out[bin] /= 19600.0f;
         return;
     }
-    const float weight = 1.0f / static_cast<float>(52 - this_cards);
+    const float weight = 1.0f / static_cast<float>(52 - known_card_count);
     for (int c = 0; c < 52; ++c) {
         if (used[c]) continue;
-        cards[this_cards] = static_cast<std::uint8_t>(c);
+        cards[known_card_count] = static_cast<std::uint8_t>(c);
         const hand_index_t next_id = hand_index_last(&next, cards);
-        out[prev_map[static_cast<std::size_t>(next_id)]] += weight;
+        out[next_street_map[static_cast<std::size_t>(next_id)]] += weight;
     }
 }
 
@@ -210,19 +222,73 @@ std::vector<std::uint16_t> build_river(const std::string& dir, const bucketing::
 
 // ---------------------------------------------------------------------------
 // Transition streets (turn, flop, and clustered preflop): cluster the next-street histograms.
-//   dim = number of buckets on the next street (the histogram dimension)
-//   k   = number of buckets to produce on this street
+// Train K-means on sampled histograms, then assign every current-street hand
+// to its nearest centroid. Write and return the resulting hand-ID-to-bin map.
+// The card-count lists define which combinations to enumerate. For turn,
+// {2,4} enumerates two-hole-card/four-board-card combinations, grouping suit
+// equivalents together. For each such hand, fill_histogram tries every legal
+// river card and uses the {2,5} indexer to look up the resulting river bin.
+//
+// Parameters:
+//   dir (const std::string&)
+//     Output directory; write_bin writes the map to dir + "/" + out_file.
+//   this_cpr (std::initializer_list<std::uint8_t>)
+//     Counts defining the current street's combinations: {2} preflop,
+//     {2,3} flop, {2,4} turn. Each list separates hole cards from the unordered
+//     board; "cpr" is the indexer API's abbreviation for cards per round.
+//     init_indexer builds self for these combination sizes. hand_indexer_size
+//     gives the number of suit-distinct combinations, so training can sample
+//     their IDs and assignment can iterate over all of them. For each ID,
+//     fill_histogram calls hand_unindex to recover a representative set of
+//     hole/board cards; these determine which future cards can legally be dealt.
+//   next_cpr (std::initializer_list<std::uint8_t>)
+//     Counts defining the next street's combinations: {2,3} flop, {2,4} turn,
+//     {2,5} river. For example, {2,5} indexes two-hole-card/five-board-card hands.
+//     init_indexer builds next for these combination sizes. After adding each
+//     legal future deal to the current hand, fill_histogram uses hand_index_last
+//     to convert the resulting cards into a suit-equivalent hand ID. This ID
+//     locates the hand's bin in next_street_map, so that outcome contributes
+//     to the correct histogram entry. next_cpr must match the map's combination
+//     sizes so the generated IDs address the correct map entries.
+//   next_street_map (const std::vector<std::uint16_t>&)
+//     Next street's bin map in poker order: river bins when building turn, turn
+//     bins when building flop, or flop bins when building preflop. Needed to
+//     look up the bin reached by each legal future deal; these bin counts form
+//     the current hand's histogram. The indexer supplies hand IDs, while this
+//     map supplies their learned bin IDs. Bin IDs must be in [0, dim).
+//   dim (int)
+//     Number of bins represented in next_street_map, hence the number of
+//     entries in each histogram (D). The map and dim refer to the SAME street:
+//     building flop passes turn and options.turn_bins respectively. "Next"
+//     always follows poker order (preflop -> flop -> turn -> river); maps are
+//     built in reverse order so the next street's map is already available.
+//     k is the number of bins to create for the current street.
+//   k (int)
+//     Current-street bin count (K). sample_size_for uses it to calculate the
+//     training sample size; train_centroids learns k centroids, which are
+//     added to the Faiss assignment index.
+//   out_file (const std::string&)
+//     Output filename within dir, e.g. "turn_map.bin"; also used in logs.
+//   options (const bucketing::Options&)
+//     Supplies points_per_centroid to sample_size_for, seed to sample_ids,
+//     iteration count and seed to train_centroids, and assignment_batch_size
+//     to the assignment buffers and loop. Street bin counts are supplied
+//     separately through dim and k; river_points_per_centroid is unused here.
+// Returns (std::vector<std::uint16_t>): current-street hand ID -> learned bin ID.
 // ---------------------------------------------------------------------------
 std::vector<std::uint16_t> build_transition(
     const std::string& dir, std::initializer_list<std::uint8_t> this_cpr,
-    int this_cards, std::initializer_list<std::uint8_t> next_cpr,
-    const std::vector<std::uint16_t>& prev_map, int dim, int k,
+    std::initializer_list<std::uint8_t> next_cpr,
+    const std::vector<std::uint16_t>& next_street_map, int dim, int k,
     const std::string& out_file, const bucketing::Options& options) {
     hand_indexer_t self;
     hand_indexer_t next;
     init_indexer(&self, this_cpr);
     init_indexer(&next, next_cpr);
-    const std::int64_t n = static_cast<std::int64_t>(hand_indexer_size(&self, this_cards == 2 ? 0 : 1));
+    // Derive the known-card count from the combination sizes, e.g. {2,4} -> 6.
+    // fill_histogram uses it to exclude known cards when enumerating legal deals.
+    const int known_card_count = std::accumulate(this_cpr.begin(), this_cpr.end(), 0);
+    const std::int64_t n = static_cast<std::int64_t>(hand_indexer_size(&self, known_card_count == 2 ? 0 : 1));
 
     // Stage 1: train centroids on a sample of histograms.
     const std::vector<std::int64_t> ids =
@@ -232,7 +298,7 @@ std::vector<std::uint16_t> build_transition(
     std::vector<float> samples(ids.size() * static_cast<std::size_t>(dim));
 #pragma omp parallel for schedule(dynamic, 256)
     for (std::int64_t r = 0; r < static_cast<std::int64_t>(ids.size()); ++r)
-        fill_histogram(self, next, prev_map, this_cards, dim,
+        fill_histogram(self, next, next_street_map, known_card_count, dim,
                        ids[static_cast<std::size_t>(r)],
                        &samples[static_cast<std::size_t>(r) * dim]);
     const std::vector<float> centroids = train_centroids(
@@ -249,7 +315,7 @@ std::vector<std::uint16_t> build_transition(
         const std::int64_t rows = std::min<std::int64_t>(options.assignment_batch_size, n - start);
 #pragma omp parallel for schedule(dynamic, 256)
         for (std::int64_t r = 0; r < rows; ++r)
-            fill_histogram(self, next, prev_map, this_cards, dim, start + r,
+            fill_histogram(self, next, next_street_map, known_card_count, dim, start + r,
                            &buf[static_cast<std::size_t>(r) * dim]);
         index.search(rows, buf.data(), 1, dist.data(), labels.data());
         for (std::int64_t r = 0; r < rows; ++r)
@@ -310,18 +376,13 @@ void build_bins(const Options& options) {
     const std::string dir = kAbstractionDir;
     std::filesystem::create_directories(dir);
     const auto river = build_river(dir, options);
-    // Indexer lists separate hole cards from the public board; board counts
-    // are cumulative, not cards dealt on that street. The following integer
-    // is the total known cards (hole + board), used to exclude blocked cards.
-    // Turn: {2,4} = 2 hole + 4 board cards, 6 known. Deal one of the 46
-    // remaining cards to reach river {2,5}; histogram bins are river buckets.
-    // histogram bins are river buckets.
-    const auto turn = build_transition(dir, {2, 4}, 6, {2, 5}, river,
+    // Turn: enumerate 2-hole/4-board combinations. Each histogram counts the
+    // river bins reached by the 46 legal river cards, using the {2,5} indexer.
+    const auto turn = build_transition(dir, {2, 4}, {2, 5}, river,
         options.river_bins, options.turn_bins, "turn_map.bin", options);
-    // Flop: {2,3} = 2 hole + 3 board cards, 5 known. Deal one of the 47
-    // remaining cards to reach turn {2,4}; histogram bins are turn buckets.
-    // histogram bins are turn buckets.
-    const auto flop = build_transition(dir, {2, 3}, 5, {2, 4}, turn,
+    // Flop: enumerate 2-hole/3-board combinations. Each histogram counts the
+    // turn bins reached by the 47 legal turn cards, using the {2,4} indexer.
+    const auto flop = build_transition(dir, {2, 3}, {2, 4}, turn,
         options.turn_bins, options.flop_bins, "flop_map.bin", options);
     if (options.preflop_bins == 169) {
         // Preserve all 169 suit-equivalent starting-hand classes directly.
@@ -330,7 +391,7 @@ void build_bins(const Options& options) {
         // Preflop: {2} = hole cards only, 2 known. Deal an unordered 3-card
         // flop from the 50 remaining cards: C(50,3) = 19,600 possible boards.
         // The destination is {2,3}; histogram bins are flop buckets.
-        build_transition(dir, {2}, 2, {2, 3}, flop,
+        build_transition(dir, {2}, {2, 3}, flop,
             options.flop_bins, options.preflop_bins, "preflop_map.bin", options);
     }
 }
