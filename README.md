@@ -29,7 +29,7 @@ For a native Ubuntu installation, from the repository root:
 sudo apt-get update
 sudo apt-get install -y build-essential cmake ca-certificates libfaiss-dev libopenblas-dev liblapack-dev
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel --target build_offline
+cmake --build build --parallel --target build_bins
 ```
 
 Only the vendored indexer's two C files and OMPEval's `HandEvaluator.cpp` are compiled.
@@ -72,7 +72,7 @@ Considerations:
 `rows_per_chunk * next_street_bins * 4` bytes (about 156 MiB at 8192 rows and
 5000 bins), plus maps and training data. Smaller chunks reduce that buffer;
 they do not cap total memory. All numeric options must fit a signed 32-bit
-integer. See `src/bucketing/build_offline.h` for guidance on every property.
+integer. See `src/bucketing/build_bins.h` for guidance on every property.
 - Output is fixed at `/tmp/poker_solver_buckets/`: `river_map.bin`, `turn_map.bin`,
 `flop_map.bin`, and `preflop_map.bin`. Every run recomputes all streets in that
 order and overwrites their maps. A volume or bind mount
@@ -83,11 +83,11 @@ preserves the files after the container exits.
 Save maps to `/tmp/poker_solver_buckets/` on the host, using defaults or custom options:
 
 ```bash
-./build/build_offline
-./build/build_offline --river-bins 1000 --turn-bins 2500 --flop-bins 2500 --preflop-bins 80 --points-per-centroid 128 --river-points-per-centroid 128 --kmeans-iters 30 --seed 1234 --rows-per-chunk 4096
+./build/build_bins
+./build/build_bins --river-bins 1000 --turn-bins 2500 --flop-bins 2500 --preflop-bins 80 --points-per-centroid 128 --river-points-per-centroid 128 --kmeans-iters 30 --seed 1234 --rows-per-chunk 4096
 ```
 
-Use `./build/build_offline --help` to check the CLI without generation.
+Use `./build/build_bins --help` to check the CLI without generation.
 
 ### Docker run
 

@@ -1,5 +1,5 @@
 // Offline abstraction: river equities, turn/flop transition histograms, optional preflop clustering.
-#include "bucketing/build_offline.h"
+#include "bucketing/build_bins.h"
 
 #include "bucketing/hand_isomorphism.h"
 #include "omp/HandEvaluator.h"
@@ -305,7 +305,7 @@ void validate_options(const Options& options) {
     if (options.seed < 0) throw std::invalid_argument("seed must be nonnegative");
 }
 
-void build_offline(const Options& options) {
+void build_bins(const Options& options) {
     validate_options(options);
     const std::string dir = kAbstractionDir;
     std::filesystem::create_directories(dir);

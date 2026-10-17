@@ -1,4 +1,4 @@
-#include "bucketing/build_offline.h"
+#include "bucketing/build_bins.h"
 
 #include <charconv>
 #include <cstdio>
@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
             const std::string_view flag = argv[i];
             if (flag == "--help" || flag == "-h") {
                 const bucketing::Options defaults;
-                std::printf("Usage: build_offline [options]\nBuilds all four streets.\n");
+                std::printf("Usage: build_bins [options]\nBuilds all four streets.\n");
                 for (const auto& entry : flags)
                     std::printf("  %-28s N  default %d; %s\n", entry.name,
                                 defaults.*(entry.member), entry.description);
@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     try {
-        bucketing::build_offline(options);
+        bucketing::build_bins(options);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
         return 1;

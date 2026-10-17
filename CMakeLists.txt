@@ -22,12 +22,12 @@ set(ompeval_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/third_party/OMPEval)
 add_library(ompeval STATIC ${ompeval_SOURCE_DIR}/omp/HandEvaluator.cpp)
 target_include_directories(ompeval PUBLIC ${ompeval_SOURCE_DIR})
 
-add_executable(build_offline src/bucketing/build_offline.cpp src/cli/build_offline.cpp)
-target_include_directories(build_offline PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(build_offline PRIVATE
+add_executable(build_bins src/bucketing/build_bins.cpp src/cli/build_bins.cpp)
+target_include_directories(build_bins PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(build_bins PRIVATE
     hand_isomorphism ompeval faiss OpenMP::OpenMP_CXX)
 if(MSVC)
-    target_compile_options(build_offline PRIVATE /O2 /DNDEBUG)
+    target_compile_options(build_bins PRIVATE /O2 /DNDEBUG)
 else()
-    target_compile_options(build_offline PRIVATE -O3 -DNDEBUG -ffast-math -funroll-loops)
+    target_compile_options(build_bins PRIVATE -O3 -DNDEBUG -ffast-math -funroll-loops)
 endif()

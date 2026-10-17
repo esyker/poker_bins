@@ -43,6 +43,6 @@ struct Options {
 // Validate before allocating or generating maps. Throws std::invalid_argument.
 void validate_options(const Options& options);
 // Build all four uint16 maps, using identity preflop only when preflop_bins=169.
-void build_offline(const Options& options);
+void build_bins(const Options& options);
 
 }  // namespace bucketing
