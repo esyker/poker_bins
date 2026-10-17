@@ -15,4 +15,4 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 # ENTRYPOINT ["/app/build/build_bins"]
 
 # Run the build_bins binary when the container starts with other arguments
-# ENTRYPOINT ["/app/build/build_bins", "--river-bins", "1000", "--turn-bins", "2500", "--flop-bins", "2500", "--preflop-bins", "80", "--points-per-centroid", "128", "--river-points-per-centroid", "128", "--kmeans-iters", "30", "--seed", "1234", "--rows-per-chunk", "4096"]
+# ENTRYPOINT ["/app/build/build_bins", "--river-bins", "1000", "--turn-bins", "2500", "--flop-bins", "2500", "--preflop-bins", "80", "--points-per-centroid", "128", "--river-points-per-centroid", "128", "--kmeans-iters", "30", "--seed", "1234", "--assignment-batch-size", "4096"]

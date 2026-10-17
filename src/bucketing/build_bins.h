@@ -37,7 +37,7 @@ struct Options {
     // starting range. Histogram buffer uses roughly rows * next-street bins *
     // sizeof(float) bytes; huge batches waste RAM, tiny batches add overhead.
     // This does not cap training matrices, river equities, or resident maps.
-    int rows_per_chunk = 8192;
+    int assignment_batch_size = 8192;
 };
 
 // Validate before allocating or generating maps. Throws std::invalid_argument.

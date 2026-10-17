@@ -21,7 +21,7 @@ const Flag flags[] = {
     {"--river-points-per-centroid", &bucketing::Options::river_points_per_centroid, "river sample; 0 = all hands"},
     {"--kmeans-iters", &bucketing::Options::kmeans_iters, "positive K-means iteration count"},
     {"--seed", &bucketing::Options::seed, "0..INT_MAX; sampling and K-means seed"},
-    {"--rows-per-chunk", &bucketing::Options::rows_per_chunk, "positive assignment batch size; trades RAM for throughput"},
+    {"--assignment-batch-size", &bucketing::Options::assignment_batch_size, "positive assignment batch size; trades RAM for throughput"},
 };
 }  // namespace
 

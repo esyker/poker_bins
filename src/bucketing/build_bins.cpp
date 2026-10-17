@@ -192,10 +192,10 @@ std::vector<std::uint16_t> build_river(const std::string& dir, const bucketing::
     index.add(bins, centroids.data());
     std::vector<std::uint16_t> map(static_cast<std::size_t>(n));
     // Faiss labels are int64_t; its idx_t alias moved between versions.
-    std::vector<std::int64_t> labels(static_cast<std::size_t>(options.rows_per_chunk));
-    std::vector<float> dist(static_cast<std::size_t>(options.rows_per_chunk));
-    for (std::int64_t start = 0; start < n; start += options.rows_per_chunk) {
-        const std::int64_t rows = std::min<std::int64_t>(options.rows_per_chunk, n - start);
+    std::vector<std::int64_t> labels(static_cast<std::size_t>(options.assignment_batch_size));
+    std::vector<float> dist(static_cast<std::size_t>(options.assignment_batch_size));
+    for (std::int64_t start = 0; start < n; start += options.assignment_batch_size) {
+        const std::int64_t rows = std::min<std::int64_t>(options.assignment_batch_size, n - start);
         index.search(rows, &equity[static_cast<std::size_t>(start)], 1,
                      dist.data(), labels.data());
         for (std::int64_t r = 0; r < rows; ++r)
@@ -242,11 +242,11 @@ std::vector<std::uint16_t> build_transition(
     faiss::IndexFlatL2 index(dim);
     index.add(k, centroids.data());
     std::vector<std::uint16_t> map(static_cast<std::size_t>(n));
-    std::vector<float> buf(static_cast<std::size_t>(options.rows_per_chunk) * dim);
-    std::vector<std::int64_t> labels(static_cast<std::size_t>(options.rows_per_chunk));
-    std::vector<float> dist(static_cast<std::size_t>(options.rows_per_chunk));
-    for (std::int64_t start = 0; start < n; start += options.rows_per_chunk) {
-        const std::int64_t rows = std::min<std::int64_t>(options.rows_per_chunk, n - start);
+    std::vector<float> buf(static_cast<std::size_t>(options.assignment_batch_size) * dim);
+    std::vector<std::int64_t> labels(static_cast<std::size_t>(options.assignment_batch_size));
+    std::vector<float> dist(static_cast<std::size_t>(options.assignment_batch_size));
+    for (std::int64_t start = 0; start < n; start += options.assignment_batch_size) {
+        const std::int64_t rows = std::min<std::int64_t>(options.assignment_batch_size, n - start);
 #pragma omp parallel for schedule(dynamic, 256)
         for (std::int64_t r = 0; r < rows; ++r)
             fill_histogram(self, next, prev_map, this_cards, dim, start + r,
@@ -300,8 +300,8 @@ void validate_options(const Options& options) {
         throw std::invalid_argument("preflop bins must be in 1..169");
     if (options.points_per_centroid < 0 || options.river_points_per_centroid < 0)
         throw std::invalid_argument("points per centroid must be nonnegative");
-    if (options.kmeans_iters < 1 || options.rows_per_chunk < 1)
-        throw std::invalid_argument("iterations and rows per chunk must be positive");
+    if (options.kmeans_iters < 1 || options.assignment_batch_size < 1)
+        throw std::invalid_argument("iterations and assignment batch size must be positive");
     if (options.seed < 0) throw std::invalid_argument("seed must be nonnegative");
 }
 
